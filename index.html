@@ -1,0 +1,598 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+const GroupSelectionSimulation = () => {
+  // Simulation parameters
+  const [numGroups, setNumGroups] = useState(10);
+  const [groupSize, setGroupSize] = useState(50);
+  const [generations, setGenerations] = useState(200);
+  const [altruismCost, setAltruismCost] = useState(0.03);
+  const [altruismBenefit, setAltruismBenefit] = useState(0.1);
+  const [migrationRate, setMigrationRate] = useState(0.05);
+  const [groupCompetitionStrength, setGroupCompetitionStrength] = useState(0.5);
+  const [groupExtinctionRate, setGroupExtinctionRate] = useState(0.05);
+  const [mutationRate, setMutationRate] = useState(0.01);
+  const [withinGroupSelection, setWithinGroupSelection] = useState(true);
+  const [betweenGroupSelection, setBetweenGroupSelection] = useState(true);
+  
+  // Simulation state
+  const [isRunning, setIsRunning] = useState(false);
+  const [currentGeneration, setCurrentGeneration] = useState(0);
+  const [simulationData, setSimulationData] = useState([]);
+  const [altruistFrequency, setAltruistFrequency] = useState(0.5);
+  const [groups, setGroups] = useState([]);
+  const [conclusion, setConclusion] = useState("");
+  const animationRef = useRef();
+  
+  // Initialize groups
+  const initializeGroups = () => {
+    const newGroups = [];
+    for (let i = 0; i < numGroups; i++) {
+      const members = [];
+      for (let j = 0; j < groupSize; j++) {
+        // Randomly assign altruist (true) or selfish (false) trait with probability altruistFrequency
+        members.push(Math.random() < altruistFrequency);
+      }
+      newGroups.push(members);
+    }
+    return newGroups;
+  };
+  
+  // Run a single generation of the simulation
+  const runGeneration = (currentGroups) => {
+    let newGroups = [];
+    
+    // Within-group selection and reproduction
+    for (let i = 0; i < currentGroups.length; i++) {
+      const group = currentGroups[i];
+      const altruistCount = group.filter(isAltruist => isAltruist).length;
+      
+      // Calculate fitness for each individual
+      const fitnesses = group.map(isAltruist => {
+        // Base fitness
+        let fitness = 1.0;
+        
+        // Cost of being an altruist
+        if (isAltruist && withinGroupSelection) {
+          fitness -= altruismCost;
+        }
+        
+        // Benefit received from altruists in the group
+        const altruistFraction = altruistCount / group.length;
+        fitness += altruismBenefit * altruistFraction;
+        
+        return fitness;
+      });
+      
+      // Total fitness in the group
+      const totalFitness = fitnesses.reduce((sum, fitness) => sum + fitness, 0);
+      
+      // Create new generation based on fitness proportional selection
+      const newMembers = [];
+      for (let j = 0; j < group.length; j++) {
+        // Roulette wheel selection
+        let r = Math.random() * totalFitness;
+        let cumulativeFitness = 0;
+        let selectedIndex = 0;
+        
+        for (let k = 0; k < group.length; k++) {
+          cumulativeFitness += fitnesses[k];
+          if (r <= cumulativeFitness) {
+            selectedIndex = k;
+            break;
+          }
+        }
+        
+        // Add to new generation with possible mutation
+        if (Math.random() < mutationRate) {
+          newMembers.push(!group[selectedIndex]);
+        } else {
+          newMembers.push(group[selectedIndex]);
+        }
+      }
+      
+      newGroups.push(newMembers);
+    }
+    
+    // Migration between groups
+    if (migrationRate > 0) {
+      const migratedGroups = [...newGroups];
+      
+      for (let i = 0; i < migratedGroups.length; i++) {
+        const group = [...migratedGroups[i]];
+        for (let j = 0; j < group.length; j++) {
+          if (Math.random() < migrationRate) {
+            // Select a random destination group that isn't the current one
+            let destGroup;
+            do {
+              destGroup = Math.floor(Math.random() * migratedGroups.length);
+            } while (destGroup === i && migratedGroups.length > 1);
+            
+            // Move individual from source to destination group
+            if (j < group.length) {
+              const migrant = group[j];
+              group.splice(j, 1);
+              migratedGroups[destGroup].push(migrant);
+              j--; // Adjust index since we removed an element
+            }
+          }
+        }
+        migratedGroups[i] = group;
+      }
+      
+      newGroups = migratedGroups;
+    }
+    
+    // Between-group competition (group selection)
+    if (betweenGroupSelection) {
+      const groupsAfterCompetition = [...newGroups];
+      const groupFitnesses = [];
+      
+      // Calculate fitness for each group
+      for (let i = 0; i < groupsAfterCompetition.length; i++) {
+        const altruistCount = groupsAfterCompetition[i].filter(isAltruist => isAltruist).length;
+        const altruistFraction = altruistCount / groupsAfterCompetition[i].length;
+        
+        // Group fitness increases with proportion of altruists
+        const groupFitness = 1.0 + groupCompetitionStrength * altruistFraction;
+        groupFitnesses.push(groupFitness);
+      }
+      
+      // Group extinction and fission based on group fitness
+      for (let i = 0; i < groupsAfterCompetition.length; i++) {
+        // Group extinction with probability inversely related to fitness
+        if (Math.random() < groupExtinctionRate / groupFitnesses[i]) {
+          // Find the fittest group
+          const fittestGroupIndex = groupFitnesses.indexOf(Math.max(...groupFitnesses));
+          
+          if (fittestGroupIndex !== i) {
+            // Replace extinct group with offspring of fittest group
+            const parentGroup = [...groupsAfterCompetition[fittestGroupIndex]];
+            groupsAfterCompetition[i] = parentGroup.map(isAltruist => 
+              Math.random() < mutationRate ? !isAltruist : isAltruist
+            );
+          }
+        }
+      }
+      
+      newGroups = groupsAfterCompetition;
+    }
+    
+    return newGroups;
+  };
+  
+  // Calculate variance of a set of values
+  const calculateVariance = (values) => {
+    if (values.length === 0) return 0;
+    
+    const mean = values.reduce((sum, val) => sum + val, 0) / values.length;
+    const squaredDiffs = values.map(val => Math.pow(val - mean, 2));
+    const variance = squaredDiffs.reduce((sum, val) => sum + val, 0) / values.length;
+    
+    return variance;
+  };
+  
+  // Generate conclusion about the simulation
+  const generateConclusion = () => {
+    if (simulationData.length === 0) return;
+    
+    const finalData = simulationData[simulationData.length - 1];
+    const initialData = simulationData[0];
+    
+    let conclusion = "";
+    
+    if (finalData.altruistFraction > 0.8) {
+      conclusion = "Altruism evolved to high levels under these conditions. ";
+    } else if (finalData.altruistFraction < 0.2) {
+      conclusion = "Altruism was selected against under these conditions. ";
+    } else {
+      conclusion = "Altruism and selfishness coexisted in a mixed equilibrium. ";
+    }
+    
+    if (finalData.altruistFraction > initialData.altruistFraction) {
+      conclusion += "Altruistic traits increased over time, suggesting they were adaptive. ";
+    } else if (finalData.altruistFraction < initialData.altruistFraction) {
+      conclusion += "Altruistic traits decreased over time, suggesting they were maladaptive. ";
+    }
+    
+    if (betweenGroupSelection && !withinGroupSelection) {
+      conclusion += "With only between-group selection active, group selection favored altruism. ";
+    } else if (!betweenGroupSelection && withinGroupSelection) {
+      conclusion += "With only within-group selection active, individual selection dominated. ";
+    } else if (betweenGroupSelection && withinGroupSelection) {
+      if (groupCompetitionStrength > altruismCost * 2) {
+        conclusion += "Strong group selection counteracted individual selection against altruism. ";
+      } else {
+        conclusion += "Individual selection against altruism outweighed group selection benefits. ";
+      }
+    }
+    
+    if (migrationRate > 0.2) {
+      conclusion += "High migration rates weakened group selection effects. ";
+    } else if (migrationRate < 0.05) {
+      conclusion += "Low migration rates maintained group differences, strengthening group selection. ";
+    }
+    
+    if (altruismCost > altruismBenefit) {
+      conclusion += "The high cost of altruism relative to its benefit made it harder to evolve. ";
+    } else if (altruismCost < altruismBenefit / 3) {
+      conclusion += "The low cost of altruism relative to its benefit made it easier to evolve. ";
+    }
+    
+    setConclusion(conclusion);
+  };
+  
+  // Start the simulation
+  const startSimulation = () => {
+    // Reset simulation state
+    setCurrentGeneration(0);
+    setSimulationData([]);
+    
+    // Initialize groups
+    const initialGroups = initializeGroups();
+    setGroups(initialGroups);
+    
+    // Calculate initial statistics
+    const altruistCount = initialGroups.reduce((count, group) => 
+      count + group.filter(isAltruist => isAltruist).length, 0);
+    const totalIndividuals = initialGroups.reduce((count, group) => count + group.length, 0);
+    const globalAltruistFraction = altruistCount / totalIndividuals;
+    
+    const groupAltruistFractions = initialGroups.map(group => {
+      const altruists = group.filter(isAltruist => isAltruist).length;
+      return altruists / group.length;
+    });
+    
+    const groupVariance = calculateVariance(groupAltruistFractions);
+    
+    setSimulationData([{
+      generation: 0,
+      altruistFraction: globalAltruistFraction,
+      groupVariance: groupVariance
+    }]);
+    
+    // Start the animation loop
+    setIsRunning(true);
+  };
+  
+  // Stop the simulation
+  const stopSimulation = () => {
+    setIsRunning(false);
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+    }
+  };
+  
+  // Reset the simulation
+  const resetSimulation = () => {
+    stopSimulation();
+    setCurrentGeneration(0);
+    setSimulationData([]);
+    setGroups([]);
+    setConclusion("");
+  };
+  
+  // Run the simulation loop
+  useEffect(() => {
+    if (!isRunning) return;
+    
+    if (currentGeneration >= generations) {
+      setIsRunning(false);
+      generateConclusion();
+      return;
+    }
+    
+    const runSimulationStep = () => {
+      setGroups(prevGroups => {
+        const newGroups = runGeneration(prevGroups);
+        
+        // Calculate statistics
+        let totalAltruists = 0;
+        let totalIndividuals = 0;
+        const groupAltruistFractions = [];
+        
+        newGroups.forEach(group => {
+          const altruists = group.filter(isAltruist => isAltruist).length;
+          totalAltruists += altruists;
+          totalIndividuals += group.length;
+          groupAltruistFractions.push(altruists / group.length);
+        });
+        
+        const globalAltruistFraction = totalAltruists / totalIndividuals;
+        const groupVariance = calculateVariance(groupAltruistFractions);
+        
+        // Update simulation data
+        setSimulationData(prevData => [
+          ...prevData,
+          {
+            generation: currentGeneration + 1,
+            altruistFraction: globalAltruistFraction,
+            groupVariance: groupVariance
+          }
+        ]);
+        
+        setCurrentGeneration(prevGen => prevGen + 1);
+        
+        return newGroups;
+      });
+    };
+    
+    animationRef.current = requestAnimationFrame(runSimulationStep);
+    
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [isRunning, currentGeneration, generations]);
+  
+  return (
+    <div className="p-4 max-w-6xl mx-auto">
+      <h1 className="text-2xl font-bold mb-4">Group Selection and the Evolution of Altruism</h1>
+      
+      <div className="mb-6 p-4 bg-gray-100 rounded-lg">
+        <h2 className="text-xl font-semibold mb-2">Simulation Parameters</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block mb-1">Number of Groups: {numGroups}</label>
+            <input 
+              type="range" 
+              min="2" 
+              max="20" 
+              value={numGroups} 
+              onChange={(e) => setNumGroups(parseInt(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Group Size: {groupSize}</label>
+            <input 
+              type="range" 
+              min="10" 
+              max="100" 
+              value={groupSize} 
+              onChange={(e) => setGroupSize(parseInt(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Generations: {generations}</label>
+            <input 
+              type="range" 
+              min="50" 
+              max="500" 
+              step="50"
+              value={generations} 
+              onChange={(e) => setGenerations(parseInt(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Initial Altruist Frequency: {(altruistFrequency * 100).toFixed(0)}%</label>
+            <input 
+              type="range" 
+              min="0" 
+              max="1" 
+              step="0.1"
+              value={altruistFrequency} 
+              onChange={(e) => setAltruistFrequency(parseFloat(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Cost of Altruism: {altruismCost.toFixed(2)}</label>
+            <input 
+              type="range" 
+              min="0" 
+              max="0.2" 
+              step="0.01"
+              value={altruismCost} 
+              onChange={(e) => setAltruismCost(parseFloat(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Benefit from Altruism: {altruismBenefit.toFixed(2)}</label>
+            <input 
+              type="range" 
+              min="0" 
+              max="0.3" 
+              step="0.01"
+              value={altruismBenefit} 
+              onChange={(e) => setAltruismBenefit(parseFloat(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Migration Rate: {(migrationRate * 100).toFixed(0)}%</label>
+            <input 
+              type="range" 
+              min="0" 
+              max="0.3" 
+              step="0.01"
+              value={migrationRate} 
+              onChange={(e) => setMigrationRate(parseFloat(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Group Competition Strength: {groupCompetitionStrength.toFixed(2)}</label>
+            <input 
+              type="range" 
+              min="0" 
+              max="1" 
+              step="0.05"
+              value={groupCompetitionStrength} 
+              onChange={(e) => setGroupCompetitionStrength(parseFloat(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Group Extinction Rate: {(groupExtinctionRate * 100).toFixed(0)}%</label>
+            <input 
+              type="range" 
+              min="0" 
+              max="0.2" 
+              step="0.01"
+              value={groupExtinctionRate} 
+              onChange={(e) => setGroupExtinctionRate(parseFloat(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Mutation Rate: {(mutationRate * 100).toFixed(0)}%</label>
+            <input 
+              type="range" 
+              min="0" 
+              max="0.1" 
+              step="0.01"
+              value={mutationRate} 
+              onChange={(e) => setMutationRate(parseFloat(e.target.value))}
+              className="w-full"
+              disabled={isRunning}
+            />
+          </div>
+          
+          <div className="flex items-center">
+            <input 
+              type="checkbox" 
+              id="withinGroupSelection" 
+              checked={withinGroupSelection} 
+              onChange={(e) => setWithinGroupSelection(e.target.checked)}
+              disabled={isRunning}
+              className="mr-2"
+            />
+            <label htmlFor="withinGroupSelection">Within-Group Selection</label>
+          </div>
+          
+          <div className="flex items-center">
+            <input 
+              type="checkbox" 
+              id="betweenGroupSelection" 
+              checked={betweenGroupSelection} 
+              onChange={(e) => setBetweenGroupSelection(e.target.checked)}
+              disabled={isRunning}
+              className="mr-2"
+            />
+            <label htmlFor="betweenGroupSelection">Between-Group Selection</label>
+          </div>
+        </div>
+        
+        <div className="mt-4 flex gap-2">
+          <button 
+            onClick={startSimulation} 
+            disabled={isRunning}
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400"
+          >
+            Start Simulation
+          </button>
+          <button 
+            onClick={stopSimulation} 
+            disabled={!isRunning}
+            className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400"
+          >
+            Stop Simulation
+          </button>
+          <button 
+            onClick={resetSimulation}
+            className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+      
+      {currentGeneration > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-2">Simulation Results</h2>
+          <div className="p-4 bg-gray-100 rounded-lg">
+            <p className="mb-2">Generation: {currentGeneration} / {generations}</p>
+            <p className="mb-2">Global Altruist Frequency: {simulationData.length > 0 ? 
+              `${(simulationData[simulationData.length - 1].altruistFraction * 100).toFixed(1)}%` : '0%'}</p>
+            <p className="mb-4">Group Variance: {simulationData.length > 0 ? 
+              simulationData[simulationData.length - 1].groupVariance.toFixed(4) : '0'}</p>
+            
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={simulationData}
+                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="generation" 
+                    label={{ value: 'Generation', position: 'insideBottomRight', offset: -5 }} 
+                  />
+                  <YAxis 
+                    label={{ value: 'Frequency', angle: -90, position: 'insideLeft' }} 
+                    domain={[0, 1]} 
+                  />
+                  <Tooltip />
+                  <Legend />
+                  <Line 
+                    type="monotone" 
+                    dataKey="altruistFraction" 
+                    name="Altruist Frequency" 
+                    stroke="#8884d8" 
+                    activeDot={{ r: 8 }} 
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="groupVariance" 
+                    name="Group Variance" 
+                    stroke="#82ca9d" 
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            
+            {conclusion && (
+              <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded">
+                <h3 className="font-semibold mb-1">Conclusion:</h3>
+                <p>{conclusion}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      <div className="p-4 bg-gray-100 rounded-lg">
+        <h2 className="text-xl font-semibold mb-2">Simulation Key Concepts</h2>
+        <div className="space-y-2">
+          <p><strong>Altruism</strong>: Behavior that benefits others at a cost to oneself.</p>
+          <p><strong>Within-Group Selection</strong>: Selection pressure within groups favoring selfish individuals over altruists.</p>
+          <p><strong>Between-Group Selection</strong>: Selection pressure between groups favoring groups with more altruists.</p>
+          <p><strong>Migration</strong>: Movement of individuals between groups, which can undermine group selection.</p>
+          <p><strong>Adaptive or Maladaptive?</strong>: Whether altruism evolves depends on the balance between:</p>
+          <ul className="list-disc pl-6">
+            <li>Cost to the individual altruist</li>
+            <li>Benefit to recipients</li>
+            <li>Strength of group selection</li>
+            <li>Migration between groups</li>
+            <li>Population structure and dynamics</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default GroupSelectionSimulation;
